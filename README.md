@@ -17,10 +17,9 @@ Concept is identical to [UnityDoorstop](https://github.com/NeighTools/UnityDoors
 
 ## How to use
 
-(0.) Edit the code in NRedirect/Main.cs to execute the assembly that you desire. Currently there's no configuration for NRedirect, so the target assembly is hardcoded.
-
 1. Drag the .NET framework .exe file onto `NRedirect.Generator.exe`, which will find a suitable proxy library, create a proxy for it and generate the required .exe.config file.
 2. Place `NRedirect.dll` in the same directory as the .NET framework .exe.
+3. Edit your generated `<application>.exe.config` file, and change the "Executable" config entry to point to the assembly you would like to launch.
 
 You're done! You should be able to launch the application now, and your custom code will execute in a new appdomain.
 
