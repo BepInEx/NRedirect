@@ -48,24 +48,41 @@ namespace NRedirect.Generator
 
 		static void Main(string[] args)
 		{
-			if (args.Length == 0 || args.Any(x => x == "--help"))
+			Arguments arguments = Arguments.Parse(args);
+
+			if (arguments.Values.Count == 0 || arguments.Flag("help"))
 			{
-				LogMessage("Usage: NDirect.Generator.exe <.NET framework .exe> [--verbose] [--help]");
+				LogMessage("Usage: NDirect.Generator.exe [--verbose] [--help] ( <.NET framework .exe> | --hook [--strip] <.NET assembly to install hook in> )");
 				return;
 			}
 
-			if (!args[0].EndsWith(".exe") || !File.Exists(args[0]))
+			if (arguments.Flag("verbose"))
+				Verbose = true;
+
+			string exeName = arguments.Values[0];
+
+			if (arguments.Flag("hook"))
+			{
+				string outputPath = Path.Combine(Path.GetDirectoryName(exeName),
+					Path.GetFileNameWithoutExtension(exeName) + "-proxy" +
+					Path.GetExtension(exeName));
+
+				using var assemblyDefinition = AssemblyDefinition.ReadAssembly(exeName);
+
+				InstallHook(assemblyDefinition, outputPath, arguments.Flag("strip"));
+
+				LogMessage("Finished!");
+				return;
+			}
+
+			if (!exeName.EndsWith(".exe") || !File.Exists(exeName))
 			{
 				LogError("Please specify an executable file to generate a proxy for");
 				return;
 			}
 
-			if (args.Any(x => x == "--verbose"))
-				Verbose = true;
-
-			string exeName = args[0];
-			string exeDirectory = Path.GetDirectoryName(args[0]);
-			string configName = Path.ChangeExtension(args[0], ".exe.config");
+			string exeDirectory = Path.GetDirectoryName(exeName);
+			string configName = Path.ChangeExtension(exeName, ".exe.config");
 
 			LogVerbose($"Target executable: {exeName}");
 			LogVerbose($"Target executable directory: {exeDirectory}");
@@ -136,6 +153,9 @@ namespace NRedirect.Generator
 				if (isMixedMode)
 					continue;
 
+				if (resolvedAssembly.Name.HasPublicKey)
+					continue;
+				
 				foundReferences.Add(new AssemblyNamePath(reference, path));
 			}
 
@@ -145,55 +165,16 @@ namespace NRedirect.Generator
 				return;
 			}
 
-			var foundRef = foundReferences.OrderByDescending(x => x.AssemblyLocation != null ? 1 : 0).First();
+			var foundRef = foundReferences.First();
 
 			LogMessage($"Using '{foundRef.AssemblyLocation}' as library to generate a proxy for");
 
-			string proxyPath;
-			AssemblyDefinition assemblyDefinition;
+			string proxyPath = Path.Combine(exeDirectory, foundRef.NameReference.Name + "-proxy.dll");
 
-			if (foundRef.AssemblyLocation != null)
+
+			using (var originalAssembly = AssemblyDefinition.ReadAssembly(foundRef.AssemblyLocation))
 			{
-				proxyPath = Path.Combine(exeDirectory, foundRef.NameReference.Name + "-proxy.dll");
-
-				assemblyDefinition = AssemblyDefinition.ReadAssembly(foundRef.AssemblyLocation);
-			}
-			else
-			{
-				proxyPath = Path.Combine(exeDirectory, foundRef.NameReference.Name + "-proxy.dll");
-				assemblyDefinition = resolver.Resolve(foundRef.NameReference);
-			}
-
-
-			using (var nredirectAssembly = AssemblyDefinition.ReadAssembly("NRedirect.dll"))
-			using (assemblyDefinition)
-			{
-				AssemblyStripper.StripAssembly(assemblyDefinition);
-
-				if (assemblyDefinition.Name.PublicKeyToken.Length > 0)
-				{
-					assemblyDefinition.Name.Version = new Version(99, 0, 0);
-					//assemblyDefinition.Name.PublicKeyToken = new byte[0];
-				}
-
-				var targetMethod = nredirectAssembly.MainModule.GetType("NRedirect.Main").Methods.First(x => x.Name == "Start");
-				var targetMethodRef = assemblyDefinition.MainModule.ImportReference(targetMethod);
-
-				var moduleType = assemblyDefinition.MainModule.Types.First(x => x.Name == "<Module>");
-
-				var cctorMethod = new MethodDefinition(".cctor",
-					MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName | MethodAttributes.HideBySig,
-					assemblyDefinition.MainModule.ImportReference(typeof(void)));
-
-				var il = cctorMethod.Body.GetILProcessor();
-				il.Emit(OpCodes.Call, targetMethodRef);
-				il.Emit(OpCodes.Ret);
-
-				moduleType.Methods.Add(cctorMethod);
-
-				LogMessage($"Writing proxy file to '{proxyPath}'");
-
-				assemblyDefinition.Write(proxyPath);
+				InstallHook(originalAssembly, proxyPath, true);
 			}
 
 			ConfigGenerator generator;
@@ -212,6 +193,42 @@ namespace NRedirect.Generator
 			generator.BuildAndWriteConfig(configName);
 
 			LogMessage("Finished!");
+		}
+
+		static void InstallHook(AssemblyDefinition assemblyDefinition, string outputPath, bool strip)
+		{
+			using (var nredirectAssembly = AssemblyDefinition.ReadAssembly("NRedirect.dll"))
+			{
+				if (strip)
+					AssemblyStripper.StripAssembly(assemblyDefinition);
+
+				//if (assemblyDefinition.Name.PublicKeyToken.Length > 0)
+				//{
+				//	assemblyDefinition.Name.Version = new Version(99, 0, 0);
+				//	//assemblyDefinition.Name.PublicKeyToken = new byte[0];
+				//}
+
+				var targetMethod = nredirectAssembly.MainModule.GetType("NRedirect.Main").Methods
+					.First(x => x.Name == "Start");
+				var targetMethodRef = assemblyDefinition.MainModule.ImportReference(targetMethod);
+
+				var moduleType = assemblyDefinition.MainModule.Types.First(x => x.Name == "<Module>");
+
+				var cctorMethod = new MethodDefinition(".cctor",
+					MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName |
+					MethodAttributes.HideBySig,
+					assemblyDefinition.MainModule.ImportReference(typeof(void)));
+
+				var il = cctorMethod.Body.GetILProcessor();
+				il.Emit(OpCodes.Call, targetMethodRef);
+				il.Emit(OpCodes.Ret);
+
+				moduleType.Methods.Add(cctorMethod);
+
+				LogMessage($"Writing proxy assembly to '{outputPath}'");
+
+				assemblyDefinition.Write(outputPath);
+			}
 		}
 	}
 

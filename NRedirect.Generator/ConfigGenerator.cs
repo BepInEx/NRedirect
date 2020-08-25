@@ -68,6 +68,14 @@ namespace NRedirect.Generator
 				new XAttribute("newVersion", ReplacementAssemblyVersion.ToString()));
 		}
 
+		private XElement GenerateAppSettingsElement()
+		{
+			return new XElement("appSettings",
+				new XElement("add",
+					new XAttribute("key", "Executable"),
+					new XAttribute("value", "BepInEx.NetLauncher.exe")));
+		}
+
 		public string BuildConfig()
 		{
 			XDocument xmlDocument = new XDocument();
@@ -81,7 +89,8 @@ namespace NRedirect.Generator
 			xmlDocument.Add(
 				new XElement("configuration",
 					new XElement("runtime",
-						bindingElement)));
+						bindingElement),
+					GenerateAppSettingsElement()));
 
 			return xmlDocument.ToString(SaveOptions.None);
 		}
